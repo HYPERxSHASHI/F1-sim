@@ -7,54 +7,96 @@
 let scene, camera, renderer;
 let trackGenerator, driverCamera, inputManager;
 let physicsWorld, playerVehicle, raceDirector, aiSystem, telemetryUI;
-let Ammo;
+let physicsEnabled = false;
 
 // Player state
 let playerPosition = new THREE.Vector3(0, 0, 0);
 let playerDirection = new THREE.Vector3(0, 0, 1);
 let playerSpeed = 0;
 let playerRPM = 0;
-let playerGear = 0; // 0 = Neutral, 1-8 = gears
+let playerGear = 0;
 let trackProgress = 0;
 
 // Performance tracking
 let frameCount = 0;
 let lastFrameTime = Date.now();
 let currentFPS = 60;
-let deltaTime = 0.016; // ~60fps
+let deltaTime = 0.016;
 
 // Race state
 let raceState = 'FORMATION';
-let lapStartTime = 0;
-let currentLapTime = 0;
+
+console.log('[INIT] F1 Simulator Phase 4 starting...');
 
 /**
- * Initialize Ammo.js physics engine
+ * Initialize Ammo.js physics engine with error handling
  */
 async function initPhysics() {
-    return new Promise((resolve) => {
-        Ammo().then((AmmoLib) => {
-            Ammo = AmmoLib;
-            
-            const collisionConfiguration = new Ammo.btDefaultCollisionConfiguration();
-            const dispatcher = new Ammo.btCollisionDispatcher(collisionConfiguration);
-            const overlappingPairCache = new Ammo.btDbvtBroadphase();
-            const solver = new Ammo.btSequentialImpulseConstraintSolver();
-            
-            physicsWorld = new Ammo.btDiscreteDynamicsWorld(dispatcher, overlappingPairCache, solver, collisionConfiguration);
-            physicsWorld.setGravity(new Ammo.btVector3(0, -9.81, 0));
-            
-            console.log('✓ Ammo.js Physics Engine initialized');
-            resolve();
-        });
-    });
+    console.log('[PHYSICS] Attempting to initialize Ammo.js...');
+    
+    try {
+        // Check if Ammo is available globally
+        if (typeof Ammo === 'undefined') {
+            console.warn('[PHYSICS] Ammo not found in global scope');
+            physicsEnabled = false;
+            return;
+        }
+
+        // Initialize Ammo.js
+        const ammoWasm = await Ammo();
+        console.log('[PHYSICS] Ammo.js initialized successfully');
+        
+        const collisionConfiguration = new ammoWasm.btDefaultCollisionConfiguration();
+        const dispatcher = new ammoWasm.btCollisionDispatcher(collisionConfiguration);
+        const overlappingPairCache = new ammoWasm.btDbvtBroadphase();
+        const solver = new ammoWasm.btSequentialImpulseConstraintSolver();
+        
+        physicsWorld = new ammoWasm.btDiscreteDynamicsWorld(
+            dispatcher,
+            overlappingPairCache,
+            solver,
+            collisionConfiguration
+        );
+        physicsWorld.setGravity(new ammoWasm.btVector3(0, -9.81, 0));
+        
+        // Create ground
+        const groundShape = new ammoWasm.btBoxShape(new ammoWasm.btVector3(500, 1, 500));
+        const groundTransform = new ammoWasm.btTransform();
+        groundTransform.setIdentity();
+        groundTransform.setOrigin(new ammoWasm.btVector3(0, -2, 0));
+        
+        const groundRigidBody = new ammoWasm.btRigidBody(
+            new ammoWasm.btRigidBodyConstructionInfo(
+                0,
+                new ammoWasm.btDefaultMotionState(groundTransform),
+                groundShape
+            ),
+            0
+        );
+        
+        physicsWorld.addRigidBody(groundRigidBody);
+        
+        physicsEnabled = true;
+        console.log('[PHYSICS] ✓ Physics engine ready with gravity');
+        
+    } catch (error) {
+        console.warn('[PHYSICS] ✗ Physics initialization failed:', error.message);
+        console.log('[PHYSICS] Running in FALLBACK mode (no physics collision)');
+        physicsEnabled = false;
+    }
 }
 
 /**
  * Initialize the Three.js scene
  */
 function initScene() {
+    console.log('[SCENE] Initializing Three.js scene...');
+    
     const canvas = document.getElementById('canvas');
+    if (!canvas) {
+        console.error('[SCENE] ✗ Canvas element not found!');
+        return;
+    }
     
     scene = new THREE.Scene();
     scene.background = new THREE.Color(0x87ceeb);
@@ -85,117 +127,61 @@ function initScene() {
     renderer.shadowMap.type = THREE.PCFShadowShadowMap;
     
     window.addEventListener('resize', onWindowResize);
-}
-
-/**
- * Create track collision mesh in Ammo.js
- */
-function createTrackPhysics(trackGenerator) {
-    // Get track curve and create collision mesh
-    const curve = trackGenerator.curve;
-    const points = [];
-    const numPoints = 200;
     
-    for (let i = 0; i <= numPoints; i++) {
-        const t = i / numPoints;
-        const point = curve.getPoint(t);
-        points.push(point);
-    }
-    
-    // Create ground plane (simplified - full track collision would require mesh)
-    const groundShape = new Ammo.btBoxShape(new Ammo.btVector3(500, 1, 500));
-    const groundTransform = new Ammo.btTransform();
-    groundTransform.setIdentity();
-    groundTransform.setOrigin(new Ammo.btVector3(0, -2, 0));
-    
-    const groundRigidBody = new Ammo.btRigidBody(
-        new Ammo.btRigidBodyConstructionInfo(0, new Ammo.btDefaultMotionState(groundTransform), groundShape),
-        0
-    );
-    
-    physicsWorld.addRigidBody(groundRigidBody);
-    console.log('✓ Track physics collision created');
-}
-
-/**
- * Create player vehicle with Ammo.js
- */
-function createPlayerVehicle(startPosition) {
-    // Vehicle chassis (box shape)
-    const chassisShape = new Ammo.btBoxShape(new Ammo.btVector3(0.9, 0.45, 2));
-    
-    const chassisTransform = new Ammo.btTransform();
-    chassisTransform.setIdentity();
-    chassisTransform.setOrigin(new Ammo.btVector3(startPosition.x, startPosition.y + 1, startPosition.z));
-    
-    const mass = 640; // kg - F1 car
-    const inertia = new Ammo.btVector3(0, 0, 0);
-    chassisShape.calculateLocalInertia(mass, inertia);
-    
-    const motionState = new Ammo.btDefaultMotionState(chassisTransform);
-    const rigidBodyInfo = new Ammo.btRigidBodyConstructionInfo(mass, motionState, chassisShape, inertia);
-    const rigidBody = new Ammo.btRigidBody(rigidBodyInfo);
-    
-    rigidBody.setLinearVelocity(new Ammo.btVector3(0, 0, 0));
-    rigidBody.setAngularVelocity(new Ammo.btVector3(0, 0, 0));
-    
-    physicsWorld.addRigidBody(rigidBody);
-    
-    // Create Three.js mesh for visualization
-    const geometry = new THREE.BoxGeometry(1.8, 0.9, 4);
-    const material = new THREE.MeshStandardMaterial({
-        color: 0xff0000, // Red F1 car
-        metalness: 0.8,
-        roughness: 0.2
-    });
-    const mesh = new THREE.Mesh(geometry, material);
-    mesh.castShadow = true;
-    scene.add(mesh);
-    
-    console.log('✓ Player vehicle created');
-    
-    return {
-        rigidBody,
-        mesh,
-        velocity: new THREE.Vector3(),
-        angularVelocity: new THREE.Vector3()
-    };
+    console.log('[SCENE] ✓ Scene initialized');
 }
 
 /**
  * Initialize all game systems
  */
 async function initGame() {
-    // Generate track
-    trackGenerator = new TrackGenerator(scene, 15, 300);
+    console.log('[GAME] Initializing game systems...');
     
-    // Setup camera
-    driverCamera = new DriverCamera(camera, trackGenerator);
-    const startPoint = trackGenerator.trackPath[0];
-    playerPosition.copy(startPoint).add(new THREE.Vector3(0, 1, 0));
-    
-    // Setup input
-    inputManager = new InputManager();
-    
-    // Create physics objects
-    createTrackPhysics(trackGenerator);
-    playerVehicle = createPlayerVehicle(startPoint);
-    
-    // Initialize AI system
-    aiSystem = new AISystem(scene, trackGenerator, 21);
-    aiSystem.setPhysicsWorld(physicsWorld);
-    aiSystem.initializeGrid(startPoint);
-    
-    // Initialize race director
-    raceDirector = new RaceDirector(trackGenerator, aiSystem);
-    raceDirector.stateStartTime = performance.now();
-    
-    // Initialize telemetry UI
-    telemetryUI = new TelemetryUI();
-    
-    console.log('✓ Game initialized with physics');
-    console.log('✓ Track generated with', trackGenerator.trackPath.length, 'waypoints');
-    console.log('✓ AI initialized with', aiSystem.aiCars.length, 'competitors');
+    try {
+        // Generate track
+        console.log('[TRACK] Generating track...');
+        trackGenerator = new TrackGenerator(scene, 15, 300);
+        console.log(`[TRACK] ✓ Track generated with ${trackGenerator.trackPath.length} waypoints`);
+        
+        // Setup camera
+        console.log('[CAMERA] Setting up driver camera...');
+        driverCamera = new DriverCamera(camera, trackGenerator);
+        const startPoint = trackGenerator.trackPath[0];
+        playerPosition.copy(startPoint).add(new THREE.Vector3(0, 1, 0));
+        camera.position.copy(playerPosition).add(new THREE.Vector3(0, 2, -5));
+        console.log('[CAMERA] ✓ Camera initialized at', playerPosition);
+        
+        // Setup input
+        console.log('[INPUT] Initializing input system...');
+        inputManager = new InputManager();
+        console.log('[INPUT] ✓ Input system ready');
+        
+        // Initialize AI system
+        console.log('[AI] Initializing AI system...');
+        aiSystem = new AISystem(scene, trackGenerator, 21);
+        if (physicsEnabled && physicsWorld) {
+            aiSystem.setPhysicsWorld(physicsWorld);
+        }
+        aiSystem.initializeGrid(startPoint);
+        console.log(`[AI] ✓ AI system ready with ${aiSystem.aiCars.length} competitors`);
+        
+        // Initialize race director
+        console.log('[RACE] Initializing race director...');
+        raceDirector = new RaceDirector(trackGenerator, aiSystem);
+        raceDirector.stateStartTime = performance.now();
+        console.log('[RACE] ✓ Race director ready');
+        
+        // Initialize telemetry UI
+        console.log('[TELEMETRY] Initializing telemetry UI...');
+        telemetryUI = new TelemetryUI();
+        console.log('[TELEMETRY] ✓ Telemetry UI ready');
+        
+        console.log('[GAME] ✓ All systems initialized');
+        
+    } catch (error) {
+        console.error('[GAME] ✗ Game initialization error:', error);
+        throw error;
+    }
 }
 
 /**
@@ -211,90 +197,62 @@ function onWindowResize() {
 }
 
 /**
- * Update player vehicle with physics
+ * Update player with fallback mode (no physics)
  */
-function updatePlayerPhysics(throttle, brake, steering) {
-    const THROTTLE_FORCE = 3000; // N
-    const BRAKE_FORCE = 4000; // N
-    const STEERING_ANGLE = 0.4; // radians
-    const MAX_SPEED = 330 / 3.6; // m/s
+function updatePlayerFallback(throttle, brake, steering) {
+    const maxSpeed = 330 / 3.6; // m/s
+    const acceleration = 150 / 3.6; // m/s per frame
+    const deceleration = 200 / 3.6;
     
-    // Apply throttle/brake forces
-    const forwardVector = new Ammo.btVector3(
-        Math.sin(Math.atan2(playerVehicle.velocity.x, playerVehicle.velocity.z)),
-        0,
-        Math.cos(Math.atan2(playerVehicle.velocity.x, playerVehicle.velocity.z))
-    );
-    
-    const thrustVector = new Ammo.btVector3(
-        forwardVector.x() * (throttle * THROTTLE_FORCE - brake * BRAKE_FORCE),
-        0,
-        forwardVector.z() * (throttle * THROTTLE_FORCE - brake * BRAKE_FORCE)
-    );
-    
-    playerVehicle.rigidBody.applyCentralForce(thrustVector);
-    
-    // Cap speed
-    const vel = playerVehicle.rigidBody.getLinearVelocity();
-    const speed = Math.sqrt(vel.x() ** 2 + vel.z() ** 2);
-    
-    if (speed > MAX_SPEED) {
-        const scale = MAX_SPEED / speed;
-        playerVehicle.rigidBody.setLinearVelocity(
-            new Ammo.btVector3(vel.x() * scale, vel.y(), vel.z() * scale)
-        );
+    // Apply throttle/brake
+    if (throttle > 0) {
+        playerSpeed = Math.min(playerSpeed + acceleration * throttle, maxSpeed);
+    } else if (brake > 0) {
+        playerSpeed = Math.max(playerSpeed - deceleration * brake, 0);
+    } else {
+        playerSpeed *= 0.98; // Natural drag
     }
     
-    // Steering (simplified)
-    const currentYaw = Math.atan2(playerVehicle.velocity.x, playerVehicle.velocity.z);
-    const newYaw = currentYaw + steering * STEERING_ANGLE;
-    
-    const forceDir = new Ammo.btVector3(Math.sin(newYaw), 0, Math.cos(newYaw));
-    forceDir.normalize();
-    
-    // Update velocity for next frame
-    playerVehicle.velocity.set(vel.x(), vel.y(), vel.z());
-    playerSpeed = Math.sqrt(vel.x() ** 2 + vel.z() ** 2) * 3.6; // Convert to km/h
-    
-    // Update player position from physics body
-    const transform = new Ammo.btTransform();
-    playerVehicle.rigidBody.getMotionState().getWorldTransform(transform);
-    const origin = transform.getOrigin();
-    
-    playerPosition.set(origin.x(), origin.y(), origin.z());
+    // Update direction based on steering
+    const steeringStrength = 2;
+    const steeringAngle = steering * steeringStrength * 0.016;
+    const currentYaw = Math.atan2(playerDirection.x, playerDirection.z);
+    const newYaw = currentYaw + steeringAngle;
     playerDirection.set(Math.sin(newYaw), 0, Math.cos(newYaw)).normalize();
+    
+    // Update position
+    const frameDistance = playerSpeed * 0.016; // meters per frame
+    playerPosition.add(playerDirection.clone().multiplyScalar(frameDistance));
 }
 
 /**
  * Calculate powertrain (RPM, Gear)
  */
 function updatePowertrain(throttle) {
-    const GEAR_RATIOS = [0, 12.7, 9.15, 6.62, 5.16, 4.38, 3.72, 3.08, 2.45]; // 1st-8th + reverse
+    const GEAR_RATIOS = [0, 12.7, 9.15, 6.62, 5.16, 4.38, 3.72, 3.08, 2.45];
     const FINAL_DRIVE = 3.31;
-    const TIRE_CIRCUMFERENCE = Math.PI * 0.67 * 2; // ~4.2m
+    const TIRE_CIRCUMFERENCE = Math.PI * 0.67 * 2;
     const REV_LIMITER = 17000;
     
     // Auto-shift logic
     if (throttle > 0 && playerGear === 0) {
-        playerGear = 1; // Shift to 1st when throttle applied
+        playerGear = 1;
     }
     
     // Calculate RPM from vehicle speed
     if (playerGear > 0) {
-        const wheelRPM = (playerSpeed / 3.6) / (TIRE_CIRCUMFERENCE / 60);
+        const wheelRPM = (playerSpeed * 3.6) / (TIRE_CIRCUMFERENCE / 60);
         const engineRPM = wheelRPM * GEAR_RATIOS[playerGear] * FINAL_DRIVE;
         playerRPM = Math.min(engineRPM, REV_LIMITER);
         
         // Upshift when near rev limiter
         if (playerRPM > REV_LIMITER * 0.95 && playerGear < 8) {
             playerGear++;
-            console.log(`⬆️ Shifted to gear ${playerGear}`);
         }
         
         // Downshift when losing speed
         if (playerRPM < 4000 && playerGear > 1) {
             playerGear--;
-            console.log(`⬇️ Shifted to gear ${playerGear}`);
         }
     } else {
         playerRPM = 0;
@@ -322,8 +280,15 @@ function updateGame(dt) {
         resetPlayerPosition();
     }
     
-    // Update physics
-    updatePlayerPhysics(throttle, brake, steering);
+    // Update player
+    if (physicsEnabled && physicsWorld) {
+        // Physics-based movement would go here
+        updatePlayerFallback(throttle, brake, steering);
+    } else {
+        // Fallback: kinematic movement
+        updatePlayerFallback(throttle, brake, steering);
+    }
+    
     updatePowertrain(throttle);
     
     // Update race director
@@ -334,24 +299,20 @@ function updateGame(dt) {
     aiSystem.update(playerPosition, dt);
     
     // Update camera
-    driverCamera.updatePosition(playerPosition, playerDirection, playerSpeed);
-    driverCamera.updateFOVForSpeed(playerSpeed);
+    driverCamera.updatePosition(playerPosition, playerDirection, playerSpeed * 3.6);
+    driverCamera.updateFOVForSpeed(playerSpeed * 3.6);
     driverCamera.applyAccelerationPush(throttle);
     driverCamera.applyBrakingDip(brake);
-    driverCamera.applyCornering(steering, Math.min(playerSpeed / 100, 2));
-    
-    // Sync camera to physics body
-    const transform = new Ammo.btTransform();
-    playerVehicle.rigidBody.getMotionState().getWorldTransform(transform);
-    const origin = transform.getOrigin();
-    playerVehicle.mesh.position.set(origin.x(), origin.y(), origin.z());
+    driverCamera.applyCornering(steering, Math.min((playerSpeed * 3.6) / 100, 2));
     
     // Update track progress
     const trackInfo = trackGenerator.getClosestTrackPoint(playerPosition);
     trackProgress = trackInfo.progress / 100;
     
-    // Step physics
-    physicsWorld.stepSimulation(dt, 10);
+    // Step physics if enabled
+    if (physicsEnabled && physicsWorld) {
+        physicsWorld.stepSimulation(dt, 10);
+    }
 }
 
 /**
@@ -365,24 +326,17 @@ function resetPlayerPosition() {
     playerGear = 0;
     playerRPM = 0;
     
-    // Reset physics body
-    const transform = new Ammo.btTransform();
-    transform.setIdentity();
-    transform.setOrigin(new Ammo.btVector3(playerPosition.x, playerPosition.y, playerPosition.z));
-    
-    playerVehicle.rigidBody.setMotionState(new Ammo.btDefaultMotionState(transform));
-    playerVehicle.rigidBody.setLinearVelocity(new Ammo.btVector3(0, 0, 0));
-    playerVehicle.rigidBody.setAngularVelocity(new Ammo.btVector3(0, 0, 0));
-    
     driverCamera.resetDynamics();
     raceDirector.reset();
+    
+    console.log('[RESET] Player position reset');
 }
 
 /**
  * Update HUD
  */
 function updateHUD() {
-    document.getElementById('speed').textContent = Math.round(playerSpeed) + ' km/h';
+    document.getElementById('speed').textContent = Math.round(playerSpeed * 3.6) + ' km/h';
     document.getElementById('position').textContent = raceDirector.playerPosition + '/22';
     document.getElementById('lap').textContent = raceDirector.currentLap + '/' + raceDirector.totalLaps;
     document.getElementById('lapTime').textContent = raceDirector.formatTime(raceDirector.currentLapTime);
@@ -435,7 +389,7 @@ function updateRaceStateDisplay() {
 function animate() {
     requestAnimationFrame(animate);
     
-    const dt = Math.min(0.016, deltaTime); // Cap at 60fps
+    const dt = Math.min(0.016, deltaTime);
     updateGame(dt);
     updateHUD();
     updateDebug();
@@ -449,18 +403,35 @@ function animate() {
  */
 async function main() {
     try {
-        await initPhysics();
+        console.log('[MAIN] Starting initialization sequence...');
+        
         initScene();
+        console.log('[MAIN] Scene ready, initializing physics...');
+        
+        await initPhysics();
+        console.log('[MAIN] Physics complete, initializing game...');
+        
         await initGame();
+        console.log('[MAIN] Game ready, starting animation loop...');
+        
         animate();
-        console.log('✓ F1 Simulator Phase 4 running');
+        
+        console.log(`[MAIN] ✓ F1 Simulator Phase 4 running (Physics: ${physicsEnabled ? 'ENABLED' : 'FALLBACK'})`);
+        
     } catch (error) {
-        console.error('Failed to initialize simulator:', error);
+        console.error('[MAIN] ✗ Failed to initialize simulator:', error);
+        console.error('[MAIN] Stack:', error.stack);
     }
 }
 
+// Start application when DOM is ready
+console.log('[BOOT] DOM ready check...');
 if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', main);
+    document.addEventListener('DOMContentLoaded', () => {
+        console.log('[BOOT] DOMContentLoaded fired');
+        main();
+    });
 } else {
+    console.log('[BOOT] DOM already loaded');
     main();
 }
