@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>F1 Simulator - Phase 1</title>
+    <title>F1 Simulator - Phase 4 (Complete)</title>
     <style>
         * {
             margin: 0;
@@ -104,14 +104,47 @@
             margin: 2px 0;
             opacity: 0.7;
         }
+
+        /* Race state indicator */
+        #raceState {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-family: 'Courier New', monospace;
+            font-size: 48px;
+            color: #ffff00;
+            text-shadow: 0 0 20px rgba(255, 255, 0, 0.8);
+            z-index: 20;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+
+        #raceState.show {
+            opacity: 1;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+
+        .pulse {
+            animation: pulse 0.5s ease-in-out;
+        }
     </style>
 </head>
 <body>
     <canvas id="canvas"></canvas>
 
+    <!-- Race State Indicator -->
+    <div id="raceState">FORMATION</div>
+
     <!-- HUD Display -->
     <div id="hud">
-        <div class="hud-label">F1 Simulator - Phase 1</div>
+        <div class="hud-label">F1 Simulator - Phase 4 (Complete)</div>
         <div class="hud-row">
             <div>
                 <div class="hud-label">Speed</div>
@@ -119,7 +152,27 @@
             </div>
             <div>
                 <div class="hud-label">Position</div>
-                <div class="hud-value" id="position">0.0%</div>
+                <div class="hud-value" id="position">1/22</div>
+            </div>
+        </div>
+        <div class="hud-row">
+            <div>
+                <div class="hud-label">Lap</div>
+                <div class="hud-value" id="lap">1/10</div>
+            </div>
+            <div>
+                <div class="hud-label">Lap Time</div>
+                <div class="hud-value" id="lapTime">00:00.000</div>
+            </div>
+        </div>
+        <div class="hud-row">
+            <div>
+                <div class="hud-label">Delta</div>
+                <div class="hud-value" id="delta">+0.000s</div>
+            </div>
+            <div>
+                <div class="hud-label">Gear / RPM</div>
+                <div class="hud-value" id="gear">N · 0</div>
             </div>
         </div>
     </div>
@@ -141,13 +194,27 @@
         <div class="debug-item">Camera Pos X: <span id="camX">0.0</span></div>
         <div class="debug-item">Camera Pos Y: <span id="camY">0.0</span></div>
         <div class="debug-item">Camera Pos Z: <span id="camZ">0.0</span></div>
-        <div class="debug-item">Track Segment: <span id="trackSeg">0</span></div>
+        <div class="debug-item">Track Seg: <span id="trackSeg">0</span></div>
+        <div class="debug-item">AI Cars: <span id="aiCount">0</span></div>
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    
+    <!-- Phase 4 Core Systems -->
     <script src="js/track.js"></script>
     <script src="js/camera.js"></script>
     <script src="js/controls.js"></script>
+    <script src="js/physics.js"></script>
+    <script src="js/input_system.js"></script>
+    <script src="js/profiler.js"></script>
+    <script src="js/object_pool.js"></script>
+    
+    <!-- Phase 4 Advanced Systems -->
+    <script src="js/ai_system.js"></script>
+    <script src="js/telemetry.js"></script>
+    <script src="js/audio_expanded.js"></script>
+    
+    <!-- Main Application -->
     <script src="js/main.js"></script>
 </body>
 </html>
